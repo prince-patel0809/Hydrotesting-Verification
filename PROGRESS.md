@@ -2,20 +2,21 @@
 
 ## Current status
 
-**MVP stages 1–3 implemented:** sample-image vehicle detection and configurable
-near-field filtering; OpenCV plate-candidate localization/enhancement and
-Tesseract OCR with Indian-format metadata; plus a Tailwind analyst dashboard
-with Start/Stop replay controls, WebSocket progress, IoU-based session vehicle
-IDs, separate result logs, and sharpest-frame retention.
+**MVP stages 1–6 implemented:** Batch video analyzer (`VideoBatchAnalyzer`)
+processing entire MP4 video files in one pass with tracked vehicle state;
+interactive video simulation timeline player in the React dashboard with scrubber,
+Play/Pause, frame stepping, and variable speed; live on-frame vehicle HUD with
+instant CNG cylinder hydrotest verification and supervisor alert management; and a
+complete searchable vehicle audit ledger with "Jump to Frame" seeking.
 
 ## Remaining
 
 - Test candidate localization and OCR against a varied set of Indian vehicle
-  and plate images. The current sample has one prominent rear-facing car and
-  is not a complete accuracy benchmark.
-- Replace still-image replay with video/camera sources; improve tracking
-  beyond the IoU MVP heuristic.
+  and plate images.
+- Connect live RTSP/CSI camera frame streams beyond local video/image files.
 - Add authorized vehicle-record integration and durable session persistence.
+- Populate the hydrotest vehicle registry from an authorized cylinder-data
+  provider; the current app uses the local SQLite registry only.
 
 ## Validation
 
@@ -23,6 +24,8 @@ IDs, separate result logs, and sharpest-frame retention.
   passed, including plate localization on both sample images, noisy OCR
   extraction, replay Start/Stop, vehicle tracking, and sharpest-frame retention.
 - `npm run build` in `web/` — production build passed.
+- `npm run build` in `web/` — hydrotest verification and alert panel compiled.
+- `py -3.11 -m pytest tests -q` in `api/` — 20 backend tests passed.
 - `npm audit --audit-level=moderate` in `web/` — no known vulnerabilities.
 - Browser smoke check — Image 2 replayed across multiple frames; four repeat
   detections grouped into four IDs, `DL3CCT8408` was surfaced as a

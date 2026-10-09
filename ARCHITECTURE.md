@@ -17,6 +17,17 @@ Configured sample-image source (replayed for demo)
   -> session vehicle tracker (IoU) and sharpest-frame ledger
   -> WebSocket Start/Stop replay controls and progress/events
   -> Tailwind React dashboard, session logs, and filter controls
+
+Separate hydrotest verification flow:
+
+```text
+React hydrotest panel
+  -> POST /api/verify (plate)
+  -> local SQLite vehicles registry
+  -> shared due-date rules
+  -> checks history + deduplicated alerts
+  -> dashboard/fleet counts and supervisor acknowledgement
+```
 ```
 
 `api/app/pipeline.py` composes the services; the individual services do not
@@ -41,11 +52,29 @@ sharpest annotated observation for each ID.
 ## API
 
 - `GET /api/health`: service health.
+- `GET /api/video/analysis`: retrieve cached or default full-video timeline analysis.
+- `POST /api/video/analyze`: run batch video analysis across `video.mp4` with custom settings.
+- `WS /api/video/analyze/ws`: WebSocket channel for streaming live progress of batch video processing.
 - `GET /api/detection`: process the configured sample image.
 - `WS /api/detection/live`: persistent control channel. On connect it sends
   the preview and `ready`; clients send `start`, `stop`, or `clear_log`, and
-  receive status, pipeline progress, frames, and record updates. The HTTP
-  endpoint remains available for one-shot processing.
+  receive status, pipeline progress, frames, and record updates.
+- `POST /api/verify`: check a plate against the local hydrotest registry,
+  record the result, and create/update an alert for expired or near-due
+  cylinders. Missing records/dates return `NEEDS_REVIEW`.
+- `GET /api/alerts`: filter and paginate alerts by state and level. Open
+  alerts are ordered critical-first and remain until acknowledged.
+- `POST /api/alerts/{id}/acknowledge`: acknowledge an alert with an optional
+  supervisor note; repeated acknowledgements are idempotent.
+- `GET /api/dashboard`: return local-date scan counts, open alerts, recent
+  critical-first alerts, and a fleet due-date summary.
+
+Hydrotest checks and alerts are stored in SQLite (`HYDROTEST_DB_PATH`, default
+`api/hydrotest.sqlite3`). The `vehicles` table is a local registry and must be
+populated by an authorized source. `rules.py` provides the shared expiration
+and 30-day warning classification used by plate verification and fleet
+summaries. Hydrotest registry verification is independent of the image scan
+pipeline; OCR format matching alone does not establish the registry record.
 
 Detection query parameters:
 

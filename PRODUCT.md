@@ -24,10 +24,18 @@ information provider.
   a persistent WebSocket; settings include detection thresholds.
 - Per-session IoU matching groups similar detections and retains the sharpest
   annotated frame in an in-memory ledger.
+- A separate hydrotest API and dashboard panel check the cylinder due date
+  associated with a plate. Expired cylinders create persistent critical
+  alerts; near-due cylinders create warnings; unknown records require human
+  review.
+- Supervisors can acknowledge open alerts. Hydrotest checks and alerts are
+  stored in SQLite, while the vehicle registry must be populated from an
+  authorized source.
 
 ## Not in this MVP
 
-Actual video/camera streaming, robust multi-camera tracking, physical-distance calibration,
-official registration validation, PUC/insurance/fitness lookups, authentication,
-and production deployment are future work. Third-party lookups must use an
-authorized provider and an explicit integration contract.
+Actual video/camera streaming, robust multi-camera tracking, physical-distance
+calibration, official OCR registration validation, an authorized vehicle and
+cylinder registry integration, other PUC/insurance/fitness lookups,
+authentication, and production deployment are future work. Third-party
+lookups must use an authorized provider and an explicit integration contract.

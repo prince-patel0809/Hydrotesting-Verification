@@ -47,12 +47,15 @@ class DetectionLedger:
                     continue
 
                 sharper = detection.sharpness_score > existing.sharpness_score
+                has_valid_plate = identified or existing.identified
+                best_registration = registration if identified else existing.registration
+                best_plate_status = detection.plate.status if (identified or not existing.identified) else existing.plate_status
                 record = existing.model_copy(
                     update={
-                        "confidence": detection.confidence,
-                        "registration": registration,
-                        "identified": identified,
-                        "plate_status": detection.plate.status,
+                        "confidence": max(detection.confidence, existing.confidence),
+                        "registration": best_registration,
+                        "identified": has_valid_plate,
+                        "plate_status": best_plate_status,
                         "last_seen": now,
                         "frames_seen": existing.frames_seen + 1,
                         "best_frame_number": (

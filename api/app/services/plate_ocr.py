@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import base64
 from math import ceil
 import os
+from pathlib import Path
 import re
 from typing import Literal
 
@@ -12,8 +15,27 @@ from pytesseract import TesseractNotFoundError
 
 from app.models.detection import BoundingBox, PlateRecognition, VehicleDetection
 
-if os.getenv("TESSERACT_CMD"):
-    pytesseract.pytesseract.tesseract_cmd = os.environ["TESSERACT_CMD"]
+# Auto-discover Tesseract binary on Windows
+DEFAULT_TESSERACT_PATHS = [
+    Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),
+    Path(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"),
+    Path(os.path.expanduser(r"~\AppData\Local\Programs\Tesseract-OCR\tesseract.exe")),
+    Path(os.path.expanduser(r"~\AppData\Local\Tesseract-OCR\tesseract.exe")),
+]
+tess_cmd = os.getenv("TESSERACT_CMD")
+if not tess_cmd:
+    for p in DEFAULT_TESSERACT_PATHS:
+        if p.exists():
+            tess_cmd = str(p)
+            break
+if tess_cmd:
+    pytesseract.pytesseract.tesseract_cmd = tess_cmd
+
+INDIAN_STATE_CODES = frozenset({
+    "AN", "AP", "AR", "AS", "BR", "CG", "CH", "DD", "DL", "DN", "GA", "GJ", "HP", "HR",
+    "JH", "JK", "KA", "KL", "LA", "LD", "MH", "ML", "MN", "MP", "MZ", "NL", "OD", "PB",
+    "PY", "RJ", "SK", "TN", "TR", "TS", "UK", "UP", "WB", "BH"
+})
 
 INDIAN_REGISTRATION = re.compile(
     r"^(?:[A-Z]{2}\d{1,2}[A-Z]{0,3}\d{1,4}|BH\d{2}[A-Z]{2}\d{4})$"
@@ -34,14 +56,74 @@ PREPROCESSING_STEPS = [
 
 
 def normalize_registration(text: str) -> str:
-    return re.sub(r"[^A-Z0-9]", "", text.upper())
+    cleaned = re.sub(r"[^A-Z0-9]", "", text.upper())
+    if cleaned.startswith("IND") and len(cleaned) > 7:
+        cleaned = cleaned[3:]
+    elif cleaned.startswith("INDIA") and len(cleaned) > 9:
+        cleaned = cleaned[5:]
+    return cleaned
+
+
+def repair_indian_plate_ocr(text: str) -> str:
+    """Fix common optical character recognition errors on Indian license plates."""
+    text = normalize_registration(text)
+    if len(text) < 7 or len(text) > 11:
+        return text
+
+    chars = list(text)
+    # 1. State code (First 2 chars must be alphabetic)
+    for i in range(min(2, len(chars))):
+        if chars[i] == '0': chars[i] = 'O'
+        elif chars[i] == '1': chars[i] = 'I'
+        elif chars[i] == '8': chars[i] = 'B'
+        elif chars[i] == '5': chars[i] = 'S'
+        elif chars[i] == '2': chars[i] = 'Z'
+
+    state = "".join(chars[:2])
+    if state in INDIAN_STATE_CODES or state == "BH":
+        # 2. RTO digits (chars 2..3 or 2..4 should be numeric)
+        idx = 2
+        while idx < min(4, len(chars)) and (chars[idx].isdigit() or chars[idx] in "OIZSB"):
+            if chars[idx] == 'O': chars[idx] = '0'
+            elif chars[idx] == 'I': chars[idx] = '1'
+            elif chars[idx] == 'Z': chars[idx] = '2'
+            elif chars[idx] == 'S': chars[idx] = '5'
+            elif chars[idx] == 'B': chars[idx] = '8'
+            idx += 1
+
+        # 3. Last 4 characters should be numeric
+        tail_start = max(idx, len(chars) - 4)
+        for j in range(tail_start, len(chars)):
+            if chars[j] == 'O': chars[j] = '0'
+            elif chars[j] == 'I': chars[j] = '1'
+            elif chars[j] == 'Z': chars[j] = '2'
+            elif chars[j] == 'S': chars[j] = '5'
+            elif chars[j] == 'B': chars[j] = '8'
+
+        return "".join(chars)
+
+    return text
 
 
 def extract_registration(text: str) -> str | None:
-    for match in INDIAN_REGISTRATION_SEARCH.finditer(text):
+    raw_norm = normalize_registration(text)
+    repaired = repair_indian_plate_ocr(raw_norm)
+
+    # 1. Direct repaired full match
+    if len(repaired) >= 7 and INDIAN_REGISTRATION.fullmatch(repaired):
+        return repaired
+
+    # 2. Substring matches
+    for match in INDIAN_REGISTRATION_SEARCH.finditer(repaired):
         candidate = match.group()
         if len(candidate) >= 7 and INDIAN_REGISTRATION.fullmatch(candidate):
             return candidate
+
+    for match in INDIAN_REGISTRATION_SEARCH.finditer(raw_norm):
+        candidate = match.group()
+        if len(candidate) >= 7 and INDIAN_REGISTRATION.fullmatch(candidate):
+            return candidate
+
     return None
 
 
@@ -78,6 +160,7 @@ class PlateOCR:
         x2 = min(width, ceil(vehicle.box.x2))
         y2 = min(height, ceil(vehicle.box.y2))
         vehicle_crop = image[y1:y2, x1:x2]
+
         candidate = self._find_plate_candidate(vehicle_crop)
         raw_text: str | None = None
         plate_crop: NDArray[np.uint8] | None = None
@@ -96,11 +179,11 @@ class PlateOCR:
                     (x1, y1),
                 )
 
-        normalized = extract_registration(normalize_registration(raw_text or ""))
+        normalized = extract_registration(raw_text or "")
         if normalized is None:
             fallback = self._estimate_plate_region(vehicle_crop)
             if fallback is not None:
-                fallback_crop, _ = fallback
+                fallback_crop, fallback_box = fallback
                 try:
                     fallback_text = self._read_plate_text(self._enhance(fallback_crop))
                 except TesseractNotFoundError:
@@ -111,22 +194,25 @@ class PlateOCR:
                             message="Tesseract is not installed or is not available on PATH.",
                         )
                 else:
-                    fallback_registration = extract_registration(
-                        normalize_registration(fallback_text)
-                    )
-                    if fallback_registration is not None:
-                        raw_text = fallback_text
+                    fallback_registration = extract_registration(fallback_text)
+                    if fallback_registration is not None or (not raw_text and fallback_text):
+                        raw_text = fallback_text or raw_text
                         normalized = fallback_registration
                         plate_crop = fallback_crop
-                        plate_coordinates = self._estimate_plate_box(vehicle_crop)
+                        plate_coordinates = fallback_box
                         localization_method = "lower_center_fallback"
 
         if candidate is None and normalized is None:
-            return PlateRecognition(
-                status="no_candidate",
-                candidate_found=False,
-                message="No plate-shaped region found inside this vehicle crop.",
-            )
+            fallback = self._estimate_plate_region(vehicle_crop)
+            if fallback is not None:
+                plate_crop, plate_coordinates = fallback
+                localization_method = "lower_center_fallback"
+            else:
+                return PlateRecognition(
+                    status="no_candidate",
+                    candidate_found=False,
+                    message="No plate-shaped region found inside this vehicle crop.",
+                )
 
         if plate_crop is None or plate_coordinates is None:
             raise RuntimeError("Plate candidate coordinates are missing.")
@@ -150,7 +236,7 @@ class PlateOCR:
         valid, category, special = classify_registration(normalized)
         return PlateRecognition(
             status="recognized" if valid else "unreadable",
-            candidate_found=candidate is not None or valid,
+            candidate_found=candidate is not None or valid or localization_method is not None,
             box=plate_box,
             localization_method=localization_method,
             raw_text=raw_text or None,
@@ -197,8 +283,8 @@ class PlateOCR:
         vehicle_crop: NDArray[np.uint8],
     ) -> tuple[NDArray[np.uint8], tuple[int, int, int, int]] | None:
         height, width = vehicle_crop.shape[:2]
-        x1, x2 = int(width * 0.32), int(width * 0.82)
-        y1, y2 = int(height * 0.68), int(height * 0.96)
+        x1, x2 = int(width * 0.28), int(width * 0.84)
+        y1, y2 = int(height * 0.65), int(height * 0.95)
         if x2 - x1 < 24 or y2 - y1 < 8:
             return None
         return vehicle_crop[y1:y2, x1:x2], (x1, y1, x2, y2)
@@ -209,10 +295,10 @@ class PlateOCR:
     ) -> tuple[int, int, int, int]:
         height, width = vehicle_crop.shape[:2]
         return (
-            int(width * 0.4),
-            int(height * 0.75),
-            int(width * 0.74),
-            int(height * 0.9),
+            int(width * 0.35),
+            int(height * 0.70),
+            int(width * 0.80),
+            int(height * 0.92),
         )
 
     def _find_plate_candidate(
@@ -287,18 +373,20 @@ class PlateOCR:
         thresholded = cv2.threshold(
             enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
         )[1]
+        thresholded_inv = cv2.bitwise_not(thresholded)
+
         candidates = [
             pytesseract.image_to_string(
                 variant,
                 config=whitelist.format(mode=mode),
             ).strip()
-            for variant in (enhanced, thresholded)
-            for mode in (7, 8, 13)
+            for variant in (enhanced, thresholded, thresholded_inv)
+            for mode in (7, 8, 6, 11, 13)
         ]
         valid_candidates = [
-            text
+            repair_indian_plate_ocr(text)
             for text in candidates
-            if classify_registration(normalize_registration(text))[0]
+            if classify_registration(repair_indian_plate_ocr(text))[0]
         ]
         if valid_candidates:
             return max(valid_candidates, key=len)

@@ -1,16 +1,20 @@
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Union
 
 import numpy as np
 from numpy.typing import NDArray
 
+from app.core.config import MAX_CONCURRENT_PLATE_OCR
 from app.models.detection import DetectionSettings, VehicleDetection
 from app.services.image_annotator import ImageAnnotator
-from app.services.image_source import SampleImageSource
+from app.services.image_source import SampleImageSource, VideoSource
 from app.services.near_vehicle_filter import NearVehicleFilter
 from app.services.plate_ocr import PlateOCR
 from app.services.vehicle_detector import VehicleDetector
 from app.services.vehicle_tracker import VehicleTracker
+
+AnySource = Union[VideoSource, SampleImageSource]
 
 ProgressCallback = Callable[[str, str, int], None]
 
@@ -30,7 +34,7 @@ class PipelineResult:
 class VehicleDetectionPipeline:
     def __init__(
         self,
-        source: SampleImageSource,
+        source: AnySource,
         detector: VehicleDetector,
         annotator: ImageAnnotator,
         vehicle_filter: NearVehicleFilter,
@@ -53,7 +57,8 @@ class VehicleDetectionPipeline:
             if progress_callback is not None:
                 progress_callback(stage, detail, percent)
 
-        report("loading", "Reading configured camera frame", 5)
+        source_label = "video frame" if isinstance(self.source, VideoSource) else "camera frame"
+        report("loading", f"Reading {source_label}", 5)
         source_image = self.source.read()
         report("detecting", "Detecting vehicles in frame", 15)
         candidates = self.detector.detect(
@@ -73,24 +78,32 @@ class VehicleDetectionPipeline:
         )
         tracker = vehicle_tracker if vehicle_tracker is not None else VehicleTracker()
         nearby = tracker.assign(nearby, frame_number)
-        detections: list[VehicleDetection] = []
-        for index, detection in enumerate(nearby, start=1):
+
+        def recognize(indexed_detection: tuple[int, VehicleDetection]) -> VehicleDetection:
+            index, detection = indexed_detection
             report(
                 "plate_ocr",
                 f"Checking plate for vehicle {index} of {len(nearby)}",
                 45 + int(35 * (index - 1) / max(len(nearby), 1)),
             )
-            detections.append(
-                detection.model_copy(
-                    update={
-                        "plate": self.plate_ocr.recognize(
-                            source_image,
-                            detection,
-                            settings.ocr_enabled,
-                        )
-                    }
-                )
+            return detection.model_copy(
+                update={
+                    "plate": self.plate_ocr.recognize(
+                        source_image,
+                        detection,
+                        settings.ocr_enabled,
+                    )
+                }
             )
+
+        indexed_nearby = list(enumerate(nearby, start=1))
+        if indexed_nearby:
+            with ThreadPoolExecutor(
+                max_workers=min(MAX_CONCURRENT_PLATE_OCR, len(indexed_nearby))
+            ) as executor:
+                detections = list(executor.map(recognize, indexed_nearby))
+        else:
+            detections = []
         report("annotating", "Drawing vehicle and verified-plate boxes", 85)
         annotated_image = self.annotator.annotate(source_image, detections)
         report("complete", "Frame analysis complete", 100)

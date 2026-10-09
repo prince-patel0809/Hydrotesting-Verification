@@ -2,593 +2,873 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlertCircle,
+  AlertTriangle,
+  Calendar,
   CarFront,
   Check,
+  CheckCircle2,
+  ChevronLeft,
   ChevronRight,
   CircleHelp,
   Clock3,
+  FastForward,
+  Filter,
+  Flame,
+  Gauge,
+  HelpCircle,
   Image as ImageIcon,
+  Loader2,
+  Maximize2,
+  Pause,
   Play,
+  RefreshCw,
+  Rewind,
+  RotateCcw,
   ScanLine,
+  Search,
   Settings2,
+  ShieldAlert,
   ShieldCheck,
+  Sliders,
+  Sparkles,
   Square,
+  Truck,
+  Video,
+  Volume2,
   Wifi,
   WifiOff,
   X,
 } from "lucide-react";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
-const PIPELINE = [
-  ["loading", "Frame"],
-  ["detecting", "Vehicles"],
-  ["filtering", "Near field"],
-  ["plate_ocr", "Plate OCR"],
-  ["annotating", "Review"],
-];
-const INITIAL_SETTINGS = {
-  confidence: 0.25,
-  min_area_percent: 1.5,
-  min_bottom_position: 0.55,
-  max_detections: 5,
-  ocr_enabled: true,
+
+const STATUS_CONFIG = {
+  VALID: {
+    label: "VALID",
+    color: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    badge: "bg-emerald-600 text-white",
+    icon: ShieldCheck,
+    border: "border-emerald-500",
+  },
+  EXPIRING_SOON: {
+    label: "EXPIRING SOON",
+    color: "bg-amber-50 text-amber-800 border-amber-200",
+    badge: "bg-amber-500 text-white",
+    icon: AlertTriangle,
+    border: "border-amber-500",
+  },
+  EXPIRED: {
+    label: "CRITICAL EXPIRED",
+    color: "bg-rose-50 text-rose-700 border-rose-200",
+    badge: "bg-rose-600 text-white",
+    icon: ShieldAlert,
+    border: "border-rose-500",
+  },
+  NEEDS_REVIEW: {
+    label: "NEEDS REVIEW",
+    color: "bg-orange-50 text-orange-800 border-orange-200",
+    badge: "bg-orange-500 text-white",
+    icon: CircleHelp,
+    border: "border-orange-400",
+  },
+  UNAVAILABLE: {
+    label: "UNAVAILABLE",
+    color: "bg-slate-50 text-slate-700 border-slate-200",
+    badge: "bg-slate-500 text-white",
+    icon: HelpCircle,
+    border: "border-slate-400",
+  },
 };
 
-function mergeRecords(current, summaries, updates) {
-  const next = { ...current };
-  for (const summary of summaries) {
-    next[summary.vehicle_id] = {
-      ...next[summary.vehicle_id],
-      ...summary,
-      best_frame_image: next[summary.vehicle_id]?.best_frame_image ?? null,
-    };
-  }
-  for (const update of updates) {
-    next[update.vehicle_id] = { ...next[update.vehicle_id], ...update };
-  }
-  return next;
+function formatTime(seconds) {
+  if (isNaN(seconds) || seconds == null) return "00:00";
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
-function plateLabel(record) {
-  if (record.identified) return record.registration;
-  if (record.plate_status === "no_candidate") return "Plate not visible";
-  if (record.plate_status === "disabled") return "OCR disabled";
-  if (record.plate_status === "unavailable") return "OCR unavailable";
-  if (record.detection?.plate?.normalized_text) return "Not sure";
-  return "Could not identify";
-}
-
-function DetailDialog({ record, onClose }) {
-  const [tab, setTab] = useState("summary");
-  useEffect(() => {
-    const closeOnEscape = (event) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [onClose]);
-
-  const plate = record.detection.plate;
-  const tabs = [
-    ["summary", "Summary"],
-    ["pipelines", "Pipeline results"],
-    ["metadata", "Metadata"],
-    ["report", "Report"],
-  ];
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/40 p-3 backdrop-blur-[2px] sm:p-6"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <section
-        aria-labelledby="detail-title"
-        aria-modal="true"
-        className="my-auto w-full max-w-4xl overflow-hidden rounded-xl border border-white/80 bg-[#faf9f6] shadow-[0_16px_48px_rgba(30,41,34,0.20)]"
-        role="dialog"
-      >
-        <header className="flex items-center justify-between border-b border-[#e9e5dc] px-4 py-3 sm:px-5">
-          <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#8b9188]">
-              Vehicle record · {record.vehicle_id}
-            </p>
-            <h2 className="mt-1 truncate text-lg font-semibold text-[#303831]" id="detail-title">
-              {record.identified ? record.registration : "Plate identification needs review"}
-            </h2>
-          </div>
-          <button
-            aria-label="Close vehicle details"
-            className="ml-3 rounded-md p-2 text-[#747d75] transition hover:bg-[#efede7] hover:text-[#303831]"
-            onClick={onClose}
-            type="button"
-          >
-            <X size={18} />
-          </button>
-        </header>
-
-        <nav aria-label="Vehicle detail sections" className="flex flex-wrap gap-1 border-b border-[#e9e5dc] px-3 sm:px-5">
-          {tabs.map(([id, label]) => (
-            <button
-              aria-current={tab === id ? "page" : undefined}
-              className={`shrink-0 border-b-2 px-3 py-3 text-sm font-medium transition ${
-                tab === id
-                  ? "border-[#c55b34] text-[#9c482b]"
-                  : "border-transparent text-[#747d75] hover:text-[#39423b]"
-              }`}
-              key={id}
-              onClick={() => setTab(id)}
-              type="button"
-            >
-              {label}
-            </button>
-          ))}
-        </nav>
-
-        <div className="max-h-[min(68vh,620px)] overflow-y-auto p-4 sm:p-5">
-          {tab === "summary" && (
-            <div className="grid gap-4 md:grid-cols-[1.25fr_1fr]">
-              <div className="overflow-hidden rounded-lg border border-[#e6e2da] bg-[#eeece6]">
-                {record.best_frame_image ? (
-                  <img
-                    alt={`Sharpest retained frame ${record.best_frame_number} for ${record.vehicle_id}`}
-                    className="max-h-[360px] w-full object-contain"
-                    src={record.best_frame_image}
-                  />
-                ) : (
-                  <div className="grid min-h-48 place-items-center text-sm text-[#737d74]">
-                    Best frame preview is not available.
-                  </div>
-                )}
-              </div>
-              <dl className="grid content-start grid-cols-2 gap-2">
-                <Metric label="Vehicle type" value={record.vehicle_type} />
-                <Metric label="Detection confidence" value={`${(record.confidence * 100).toFixed(1)}%`} />
-                <Metric label="Seen in frames" value={record.frames_seen} />
-                <Metric label="Sharpest frame" value={`#${record.best_frame_number}`} />
-                <Metric label="Sharpness score" value={record.sharpness_score.toFixed(1)} />
-                <Metric label="Plate status" value={plate.status.replaceAll("_", " ")} />
-              </dl>
-            </div>
-          )}
-
-          {tab === "pipelines" && (
-            <div className="overflow-hidden rounded-lg border border-[#e6e2da] bg-white">
-              <div className="grid grid-cols-[minmax(112px,0.7fr)_minmax(0,1fr)] gap-3 border-b border-[#efede8] bg-[#f6f4ef] px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-[#747d75]">
-                <span>Stage</span><span>Result</span>
-              </div>
-              <PipelineRow label="Vehicle detection" value={`${record.vehicle_type} · ${(record.confidence * 100).toFixed(1)}%`} />
-              <PipelineRow label="Near-field filter" value={`${record.detection.area_percent.toFixed(1)}% frame area · bottom ${Math.round(record.detection.bottom_position * 100)}%`} />
-              <PipelineRow label="Plate localization" value={plate.candidate_found ? plate.localization_method?.replaceAll("_", " ") ?? "Candidate found" : "No plate region found"} />
-              <PipelineRow label="Image enhancement" value={plate.preprocessing?.join(" → ") || "Not run"} />
-              <PipelineRow label="OCR" value={plate.raw_text ? `Raw: ${plate.raw_text}` : plateLabel(record)} />
-              <PipelineRow label="Indian format check" value={record.identified ? `Matched · ${plate.plate_category}` : "Not verified; no plate value inferred"} last />
-            </div>
-          )}
-
-          {tab === "metadata" && (
-            <dl className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              <Metric label="Stable vehicle ID" value={record.vehicle_id} mono />
-              <Metric label="Class" value={record.vehicle_type} />
-              <Metric label="Registration" value={record.registration ?? "Not identified"} mono />
-              <Metric label="Source box (px)" value={`${Math.round(record.detection.box.x1)}, ${Math.round(record.detection.box.y1)} → ${Math.round(record.detection.box.x2)}, ${Math.round(record.detection.box.y2)}`} mono />
-              <Metric label="Near score" value={record.detection.near_score.toFixed(3)} mono />
-              <Metric label="Image-space area" value={`${record.detection.area_percent.toFixed(2)}%`} mono />
-              <Metric label="First seen" value={new Date(record.first_seen).toLocaleString()} />
-              <Metric label="Last seen" value={new Date(record.last_seen).toLocaleString()} />
-              <Metric label="Frames observed" value={record.frames_seen} />
-              <Metric label="Best-frame sharpness" value={record.sharpness_score.toFixed(2)} mono />
-              <Metric label="Raw OCR" value={plate.raw_text ?? "No text read"} mono />
-              <Metric label="Format match" value={record.identified ? "Indian registration pattern" : "No match"} />
-            </dl>
-          )}
-
-          {tab === "report" && (
-            <div className="rounded-lg border border-[#e6e2da] bg-white p-4 text-sm leading-6 text-[#58625a]">
-              <div className="mb-3 flex items-center gap-2 font-semibold text-[#39423b]">
-                {record.identified ? <ShieldCheck className="text-[#46775b]" size={17} /> : <CircleHelp className="text-[#a36835]" size={17} />}
-                {record.identified ? "Pattern-matched plate read" : "Manual review recommended"}
-              </div>
-              <p>
-                {record.identified
-                  ? `${record.registration} matches a supported Indian registration format. This is an OCR pattern match only, not official registration verification.`
-                  : "The service did not find a confident, format-matched registration for this vehicle. No plate number has been inferred; review the retained frame manually."}
-              </p>
-              <p className="mt-2 text-xs text-[#828980]">
-                Frame #{record.best_frame_number} was retained as the sharpest of {record.frames_seen} repeated sample frames.
-              </p>
-            </div>
-          )}
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function Metric({ label, value, mono = false }) {
-  return (
-    <div className="min-w-0 rounded-lg border border-[#e9e5dc] bg-white px-3 py-2.5 shadow-[0_2px_8px_rgba(54,47,34,0.035)]">
-      <dt className="text-xs font-medium text-[#848b83]">{label}</dt>
-      <dd className={`mt-1 break-words text-sm font-semibold text-[#39423b] ${mono ? "font-mono text-[12px]" : ""}`}>
-        {value}
-      </dd>
-    </div>
-  );
-}
-
-function PipelineRow({ label, value, last = false }) {
-  return (
-    <div className={`grid grid-cols-[minmax(112px,0.7fr)_minmax(0,1fr)] gap-3 px-3 py-2.5 text-sm ${last ? "" : "border-b border-[#efede8]"}`}>
-      <span className="font-medium text-[#697269]">{label}</span>
-      <span className="break-words text-[#424c44]">{value}</span>
-    </div>
-  );
-}
-
-function LogEntry({ record, onSelect }) {
-  const identified = record.identified;
-  return (
-    <button
-      className="group flex w-full items-center gap-3 border-b border-[#eeebe5] px-3 py-2.5 text-left transition hover:bg-[#f6f4ef] focus-visible:outline-2 focus-visible:outline-[#c55b34] last:border-b-0"
-      onClick={() => onSelect(record.vehicle_id)}
-      type="button"
-    >
-      <div className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg border ${
-        identified
-          ? "border-[#d8e5d9] bg-[#eff5ef] text-[#46775b]"
-          : "border-[#eadfd2] bg-[#f8f2e9] text-[#9c6b3b]"
-      }`}>
-        {identified ? <ShieldCheck size={17} /> : <CarFront size={17} />}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate text-sm font-semibold text-[#384139]">
-            {identified ? record.registration : `${record.vehicle_type} · ${plateLabel(record)}`}
-          </span>
-          <span className={`hidden shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium sm:inline-flex ${
-            identified ? "bg-[#eff5ef] text-[#46775b]" : "bg-[#f8f2e9] text-[#936739]"
-          }`}>
-            {identified ? "IDENTIFIED" : "REVIEW"}
-          </span>
-        </div>
-        <p className="mt-0.5 truncate text-xs text-[#7b847b]">
-          {record.vehicle_type} · ID {record.vehicle_id} · {record.frames_seen} frame{record.frames_seen === 1 ? "" : "s"}
-        </p>
-      </div>
-      <div className="hidden text-right sm:block">
-        <p className="font-mono text-xs text-[#4e594f]">{record.sharpness_score.toFixed(1)} sharpness</p>
-        <p className="mt-0.5 text-[11px] text-[#858c84]">Best frame #{record.best_frame_number}</p>
-      </div>
-      <ChevronRight className="shrink-0 text-[#a4aaa2] transition group-hover:translate-x-0.5 group-hover:text-[#69736a]" size={17} />
-    </button>
-  );
-}
-
-function App() {
-  const socketRef = useRef(null);
-  const [connection, setConnection] = useState("connecting");
-  const [streamStatus, setStreamStatus] = useState("idle");
-  const [source, setSource] = useState(null);
-  const [preview, setPreview] = useState(null);
-  const [frameImage, setFrameImage] = useState(null);
-  const [frameNumber, setFrameNumber] = useState(0);
-  const [progress, setProgress] = useState({ stage: "loading", detail: "Waiting to start", percent: 0 });
-  const [settings, setSettings] = useState(INITIAL_SETTINGS);
-  const [records, setRecords] = useState({});
-  const [selectedId, setSelectedId] = useState(null);
+export default function App() {
+  const [analysis, setAnalysis] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analyzeProgress, setAnalyzeProgress] = useState({ current: 0, total: 0, stage: "", percent: 0 });
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [selectedVehicle, setSelectedVehicle] = useState(null);
+  const [filterQuery, setFilterQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("ALL");
   const [error, setError] = useState("");
 
+  // Playback state
+  const [currentFrameIdx, setCurrentFrameIdx] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
+  const [isLooping, setIsLooping] = useState(true);
+  const playTimerRef = useRef(null);
+
+  // Settings for re-analysis
+  const [settings, setSettings] = useState({
+    confidence: 0.20,
+    min_area_percent: 0.8,
+    min_bottom_position: 0.25,
+    max_detections: 8,
+    ocr_enabled: true,
+    sample_fps: 1.5,
+    max_frames: 120,
+  });
+
+  // Fetch initial or cached video analysis
+  const loadInitialAnalysis = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/video/analysis`);
+      if (!res.ok) {
+        throw new Error(`Failed to load video analysis (HTTP ${res.status})`);
+      }
+      const data = await res.json();
+      setAnalysis(data);
+      setCurrentFrameIdx(0);
+    } catch (err) {
+      setError(err.message || "Failed to load video analysis.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    let mounted = true;
+    loadInitialAnalysis();
+  }, [loadInitialAnalysis]);
+
+  // Run full batch video analysis over WebSocket
+  const startFullAnalysis = useCallback(() => {
+    setAnalyzing(true);
+    setSettingsOpen(false);
+    setError("");
+    setIsPlaying(false);
+    setAnalyzeProgress({ current: 0, total: 0, stage: "Connecting to analyzer...", percent: 0 });
+
     const base = new URL(API_BASE || window.location.origin, window.location.origin);
     const socketProtocol = base.protocol === "https:" ? "wss:" : "ws:";
     const socket = new WebSocket(
-      `${socketProtocol}//${base.host}${base.pathname.replace(/\/$/, "")}/api/detection/live`,
+      `${socketProtocol}//${base.host}${base.pathname.replace(/\/$/, "")}/api/video/analyze/ws`
     );
-    socketRef.current = socket;
 
     socket.onopen = () => {
-      if (mounted) setConnection("connected");
+      socket.send(JSON.stringify(settings));
     };
-    socket.onmessage = (message) => {
-      if (!mounted) return;
-      const event = JSON.parse(message.data);
-      if (event.type === "ready") {
-        setSource({ name: event.source_image, width: event.width, height: event.height });
-        setPreview(event.preview);
-      } else if (event.type === "status") {
-        setStreamStatus(event.status);
-        if (event.status === "log_cleared") setRecords({});
-      } else if (event.type === "progress") {
-        setProgress(event);
-      } else if (event.type === "frame") {
-        setFrameNumber(event.frame_number);
-        setSource({ name: event.source_image, width: event.image_width, height: event.image_height });
-        if (event.annotated_image) setFrameImage(event.annotated_image);
-        setRecords((current) => mergeRecords(current, event.records, event.record_updates));
-        setProgress({ stage: "complete", detail: `Frame ${event.frame_number} reviewed`, percent: 100 });
-        setError("");
-      } else if (event.type === "error") {
-        setError(event.detail);
+
+    socket.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === "progress") {
+          setAnalyzeProgress({
+            current: msg.current_frame,
+            total: msg.total_frames,
+            stage: msg.stage,
+            percent: msg.percent,
+          });
+        } else if (msg.type === "complete") {
+          setAnalysis(msg.result);
+          setCurrentFrameIdx(0);
+          setAnalyzing(false);
+          socket.close();
+        } else if (msg.type === "error") {
+          setError(msg.detail);
+          setAnalyzing(false);
+          socket.close();
+        }
+      } catch (err) {
+        console.error("WS Parse error:", err);
       }
     };
+
     socket.onerror = () => {
-      if (mounted) setConnection("error");
+      setError("WebSocket connection failed during analysis.");
+      setAnalyzing(false);
     };
+
     socket.onclose = () => {
-      if (mounted) {
-        setConnection("closed");
-        setStreamStatus("idle");
-      }
+      setAnalyzing(false);
     };
-
-    return () => {
-      mounted = false;
-      socket.close();
-    };
-  }, []);
-
-  const recordList = useMemo(
-    () => Object.values(records).sort((first, second) => second.last_seen.localeCompare(first.last_seen)),
-    [records],
-  );
-  const identifiedRecords = recordList.filter((record) => record.identified);
-  const reviewRecords = recordList.filter((record) => !record.identified);
-  const selectedRecord = selectedId ? records[selectedId] : null;
-  const activeStage = PIPELINE.findIndex(([stage]) => stage === progress.stage);
-  const isRunning = streamStatus === "running";
-
-  const startService = useCallback(() => {
-    if (socketRef.current?.readyState !== WebSocket.OPEN) {
-      setError("The API live connection is not available. Check that the FastAPI service is running.");
-      return;
-    }
-    setError("");
-    setFrameNumber(0);
-    setFrameImage(null);
-    setProgress({ stage: "loading", detail: "Starting sample-image replay", percent: 0 });
-    socketRef.current.send(JSON.stringify({ action: "start", ...settings, interval_seconds: 1.5 }));
   }, [settings]);
 
-  const stopService = useCallback(() => {
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify({ action: "stop" }));
+  // Playback timer loop
+  useEffect(() => {
+    if (!isPlaying || !analysis?.frames?.length) {
+      if (playTimerRef.current) clearInterval(playTimerRef.current);
+      return;
     }
-  }, []);
 
-  const clearLog = useCallback(() => {
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify({ action: "clear_log" }));
+    const intervalMs = Math.max(50, 1000 / (analysis.settings?.sample_fps || 1.5) / playbackSpeed);
+
+    playTimerRef.current = setInterval(() => {
+      setCurrentFrameIdx((prev) => {
+        if (prev >= analysis.frames.length - 1) {
+          if (isLooping) return 0;
+          setIsPlaying(false);
+          return prev;
+        }
+        return prev + 1;
+      });
+    }, intervalMs);
+
+    return () => {
+      if (playTimerRef.current) clearInterval(playTimerRef.current);
+    };
+  }, [isPlaying, analysis, playbackSpeed, isLooping]);
+
+  // Keyboard shortcuts (Space to play/pause, Left/Right to step)
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+      if (e.code === "Space") {
+        e.preventDefault();
+        setIsPlaying((prev) => !prev);
+      } else if (e.code === "ArrowLeft") {
+        e.preventDefault();
+        setIsPlaying(false);
+        setCurrentFrameIdx((prev) => Math.max(0, prev - 1));
+      } else if (e.code === "ArrowRight") {
+        e.preventDefault();
+        setIsPlaying(false);
+        setCurrentFrameIdx((prev) => Math.min((analysis?.frames?.length || 1) - 1, prev + 1));
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [analysis]);
+
+  const currentFrame = analysis?.frames?.[currentFrameIdx] ?? null;
+  const currentDetections = currentFrame?.detections ?? [];
+
+  // Acknowledge alert helper
+  const acknowledgeAlert = async (alertId, note = "") => {
+    try {
+      const res = await fetch(`${API_BASE}/api/alerts/${alertId}/acknowledge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: note || "Supervisor reviewed via Dashboard" }),
+      });
+      if (res.ok) {
+        // Refresh analysis/alert state
+        loadInitialAnalysis();
+      }
+    } catch (err) {
+      console.error("Alert ack error:", err);
     }
-    setSelectedId(null);
-  }, []);
+  };
 
-  const updateSetting = (key, value) => {
-    setSettings((current) => ({ ...current, [key]: value }));
+  // Filtered vehicles ledger
+  const filteredVehicles = useMemo(() => {
+    if (!analysis?.vehicles) return [];
+    return analysis.vehicles.filter((v) => {
+      const q = filterQuery.toLowerCase().trim();
+      const matchQuery =
+        !q ||
+        v.vehicle_id?.toLowerCase().includes(q) ||
+        v.vehicle_type?.toLowerCase().includes(q) ||
+        v.registration?.toLowerCase().includes(q) ||
+        v.hydrotest?.plate?.toLowerCase().includes(q) ||
+        v.hydrotest?.owner?.toLowerCase().includes(q);
+
+      const status = v.hydrotest?.status ?? (v.identified ? "VALID" : "NEEDS_REVIEW");
+      const matchStatus = statusFilter === "ALL" || status === statusFilter;
+
+      return matchQuery && matchStatus;
+    });
+  }, [analysis, filterQuery, statusFilter]);
+
+  // Jump to specific frame
+  const jumpToFrame = (frameNumberOrIndex) => {
+    if (!analysis?.frames) return;
+    const idx = analysis.frames.findIndex(
+      (f) => f.frame_index === frameNumberOrIndex || f.video_frame_number === frameNumberOrIndex
+    );
+    if (idx !== -1) {
+      setCurrentFrameIdx(idx);
+      setIsPlaying(false);
+    }
   };
 
   return (
-    <main className="mx-auto min-h-screen w-full max-w-[1440px] px-3 pb-5 sm:px-5 lg:px-7">
-      <header className="flex min-h-14 items-center justify-between border-b border-[#e4e1d9]">
-        <a aria-label="EPS vehicle review home" className="flex items-center gap-2.5 text-sm font-semibold tracking-wide text-[#384139]" href="/">
-          <span className="grid h-8 w-8 place-items-center rounded-[10px] border border-white/80 bg-[#f1f3ee] text-[#406c56] shadow-[2px_2px_6px_rgba(61,72,60,0.10),-2px_-2px_6px_rgba(255,255,255,0.8)]">
-            <CarFront size={18} />
-          </span>
-          EPS <span className="font-normal text-[#a0a69e]">/</span> VEHICLE REVIEW
-        </a>
-        <div className="flex items-center gap-2 text-xs font-medium text-[#677168]">
-          {connection === "connected" ? <Wifi className="text-[#46775b]" size={15} /> : <WifiOff className="text-[#9b6d49]" size={15} />}
-          <span className="hidden sm:inline">{connection === "connected" ? "API CONNECTED" : "API DISCONNECTED"}</span>
-          <span className={`h-2 w-2 rounded-full ${isRunning ? "animate-pulse bg-[#c55b34]" : connection === "connected" ? "bg-[#62926d]" : "bg-[#b58869]"}`} />
+    <div className="min-h-screen bg-[#f7f6f2] text-[#2d342f] font-sans antialiased">
+      {/* Top Header */}
+      <header className="sticky top-0 z-40 border-b border-[#e5e1d8] bg-white/90 backdrop-blur-md">
+        <div className="mx-auto flex h-14 max-w-[1520px] items-center justify-between px-4 sm:px-6">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#2e4033] text-white shadow-sm">
+              <CarFront size={20} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-sm tracking-tight text-[#1e2a22]">EPS HYDROTEST</span>
+                <span className="rounded bg-[#ebe8df] px-1.5 py-0.5 text-[10px] font-semibold tracking-wider text-[#636c64]">
+                  INTELLIGENCE
+                </span>
+              </div>
+              <p className="text-[11px] text-[#747e76] hidden sm:block">
+                Vehicle Video Analysis &amp; CNG Cylinder Verification
+              </p>
+            </div>
+          </div>
+
+          {/* Action Bar */}
+          <div className="flex items-center gap-2.5">
+            <button
+              onClick={() => setSettingsOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg border border-[#dcd7cc] bg-white px-3 py-1.5 text-xs font-semibold text-[#48534a] shadow-sm hover:bg-[#faf9f6] transition"
+            >
+              <Settings2 size={14} />
+              <span>Analysis Config</span>
+            </button>
+
+            <button
+              onClick={startFullAnalysis}
+              disabled={analyzing}
+              className="flex items-center gap-2 rounded-lg bg-[#c45c32] px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-[#ad4e27] transition disabled:opacity-50"
+            >
+              {analyzing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+              <span>{analyzing ? "Analyzing Video..." : "Re-Analyze Video"}</span>
+            </button>
+          </div>
         </div>
       </header>
 
-      <section className="flex flex-wrap items-center justify-between gap-3 py-4">
-        <div className="min-w-0">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.15em] text-[#818981]">Camera analysis <span className="px-1 text-[#c5beb2">/</span> India</p>
-          <h1 className="mt-1 text-[22px] font-semibold tracking-tight text-[#303831] sm:text-2xl">Vehicle activity</h1>
-          <p className="mt-1 text-sm text-[#707a71]">Review identified plates and vehicles that need a closer look.</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <details className="relative">
-            <summary className="flex min-h-10 cursor-pointer list-none items-center gap-2 rounded-lg border border-[#deded5] bg-[#f7f6f2] px-3 text-sm font-medium text-[#58635a] shadow-[2px_2px_7px_rgba(54,62,51,0.07),-2px_-2px_7px_rgba(255,255,255,0.75)] hover:bg-white">
-              <Settings2 size={16} /> <span className="hidden sm:inline">Settings</span>
-            </summary>
-            <div className="absolute right-0 z-30 mt-2 w-[min(350px,calc(100vw-24px))] rounded-xl border border-[#e4e1d9] bg-[#faf9f6] p-4 shadow-[0_12px_32px_rgba(35,44,36,0.16)]">
-              <div className="mb-3 border-b border-[#eae7df] pb-2">
-                <h2 className="text-sm font-semibold text-[#39433b]">Detection settings</h2>
-                <p className="mt-1 text-xs text-[#7c857c]">Changes apply when you start the service.</p>
+      {/* Main Container */}
+      <main className="mx-auto max-w-[1520px] px-3 py-4 sm:px-6 space-y-4">
+        {error && (
+          <div className="flex items-center justify-between rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-800">
+            <div className="flex items-center gap-2">
+              <AlertCircle size={16} className="text-rose-600 shrink-0" />
+              <span>{error}</span>
+            </div>
+            <button onClick={() => setError("")} className="hover:opacity-75">
+              <X size={14} />
+            </button>
+          </div>
+        )}
+
+        {/* Top KPI Metrics Bar */}
+        <section className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
+          <KPICard
+            label="Vehicles Detected"
+            value={analysis?.hydrotest_summary?.total_unique_vehicles ?? 0}
+            sub={`${analysis?.sampled_frames_count ?? 0} frames analyzed`}
+            icon={CarFront}
+            tone="default"
+          />
+          <KPICard
+            label="CNG Valid"
+            value={analysis?.hydrotest_summary?.valid ?? 0}
+            sub="Certified cylinders"
+            icon={ShieldCheck}
+            tone="emerald"
+          />
+          <KPICard
+            label="Expired / Critical"
+            value={analysis?.hydrotest_summary?.expired ?? 0}
+            sub="Do Not Fill Alert"
+            icon={ShieldAlert}
+            tone="rose"
+          />
+          <KPICard
+            label="Expiring Soon"
+            value={analysis?.hydrotest_summary?.expiring_soon ?? 0}
+            sub="Due within 30 days"
+            icon={AlertTriangle}
+            tone="amber"
+          />
+          <KPICard
+            label="Review Needed"
+            value={analysis?.hydrotest_summary?.needs_review ?? 0}
+            sub="Unregistered / Unverified"
+            icon={CircleHelp}
+            tone="orange"
+          />
+        </section>
+
+        {/* Main Video Simulation & Active Frame Vehicles Grid */}
+        <section className="grid gap-4 lg:grid-cols-12">
+          {/* Video Timeline Player Screen (8 cols) */}
+          <div className="lg:col-span-8 flex flex-col rounded-2xl border border-[#e2ded5] bg-white p-3.5 shadow-sm">
+            {/* Player Title & Mode */}
+            <div className="mb-2.5 flex items-center justify-between px-1">
+              <div className="flex items-center gap-2">
+                <Video size={16} className="text-[#3c6b4d]" />
+                <h2 className="text-sm font-bold text-[#273229]">
+                  Video Simulation Feed
+                </h2>
+                <span className="rounded-full bg-emerald-100 text-emerald-800 px-2 py-0.5 text-[10px] font-bold">
+                  PROCESSED TIMELINE
+                </span>
               </div>
-              <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-                <SettingSlider label="Min vehicle area" value={settings.min_area_percent} min="0.2" max="12" step="0.1" display={`${settings.min_area_percent.toFixed(1)}%`} onChange={(value) => updateSetting("min_area_percent", value)} />
-                <SettingSlider label="Near-field position" value={settings.min_bottom_position} min="0.2" max="0.9" step="0.01" display={`${Math.round(settings.min_bottom_position * 100)}%`} onChange={(value) => updateSetting("min_bottom_position", value)} />
-                <SettingSlider label="Detector confidence" value={settings.confidence} min="0.05" max="0.9" step="0.01" display={`${Math.round(settings.confidence * 100)}%`} onChange={(value) => updateSetting("confidence", value)} />
-                <SettingSlider label="Maximum vehicles" value={settings.max_detections} min="1" max="20" step="1" display={settings.max_detections} onChange={(value) => updateSetting("max_detections", value)} />
+              <div className="text-xs font-mono font-semibold text-[#5d6860]">
+                {formatTime(currentFrame?.timestamp_sec ?? 0)} / {formatTime(analysis?.duration_sec ?? 0)}
               </div>
-              <label className="mt-3 flex items-center justify-between border-t border-[#eae7df] pt-3 text-sm text-[#4f5b51]">
-                Indian plate OCR
-                <input checked={settings.ocr_enabled} className="h-4 w-4 accent-[#c55b34]" onChange={(event) => updateSetting("ocr_enabled", event.target.checked)} type="checkbox" />
+            </div>
+
+            {/* Video Canvas / Image Screen */}
+            <div className="relative aspect-video w-full overflow-hidden rounded-xl bg-black flex items-center justify-center shadow-inner">
+              {loading || analyzing ? (
+                <div className="flex flex-col items-center gap-3 text-white">
+                  <Loader2 size={36} className="animate-spin text-[#c45c32]" />
+                  <p className="text-xs font-medium tracking-wide">
+                    {analyzing ? analyzeProgress.stage || "Processing frames..." : "Loading video simulation..."}
+                  </p>
+                  {analyzing && (
+                    <div className="w-48 h-1.5 bg-white/20 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-[#c45c32] transition-all duration-300"
+                        style={{ width: `${analyzeProgress.percent}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+              ) : currentFrame?.image_base64 ? (
+                <img
+                  src={currentFrame.image_base64}
+                  alt={`Frame ${currentFrame.frame_index}`}
+                  className="h-full w-full object-contain select-none"
+                />
+              ) : (
+                <div className="text-slate-400 text-xs">No frame data available</div>
+              )}
+
+              {/* On-Screen HUD Overlay */}
+              <div className="pointer-events-none absolute top-3 left-3 flex flex-wrap gap-2">
+                <span className="rounded-md bg-black/70 px-2.5 py-1 font-mono text-[11px] font-semibold text-white backdrop-blur-md">
+                  FRAME #{String(currentFrameIdx + 1).padStart(3, "0")} / {analysis?.frames?.length ?? 0}
+                </span>
+                <span className="rounded-md bg-black/70 px-2.5 py-1 text-[11px] font-semibold text-emerald-400 backdrop-blur-md flex items-center gap-1">
+                  <span className="h-2 w-2 rounded-full bg-emerald-500 animate-ping inline-block" />
+                  {currentDetections.length} VEHICLES IN VIEW
+                </span>
+              </div>
+            </div>
+
+            {/* Timeline Scrubber Slider */}
+            <div className="mt-3 px-1 space-y-1">
+              <div className="relative flex items-center">
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.max(0, (analysis?.frames?.length || 1) - 1)}
+                  value={currentFrameIdx}
+                  onChange={(e) => {
+                    setIsPlaying(false);
+                    setCurrentFrameIdx(Number(e.target.value));
+                  }}
+                  className="w-full accent-[#c45c32] h-2 bg-[#eae7de] rounded-lg cursor-pointer transition-all"
+                />
+              </div>
+
+              {/* Player Controls Bar */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-xs text-[#525e55]">
+                {/* Play / Step Buttons */}
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => {
+                      setIsPlaying(false);
+                      setCurrentFrameIdx(0);
+                    }}
+                    title="Rewind to start"
+                    className="p-1.5 rounded-lg hover:bg-[#f0ede6] text-[#4d5750]"
+                  >
+                    <RotateCcw size={15} />
+                  </button>
+                  <button
+                    onClick={() => {
+                      setIsPlaying(false);
+                      setCurrentFrameIdx((prev) => Math.max(0, prev - 1));
+                    }}
+                    title="Previous frame"
+                    className="p-1.5 rounded-lg hover:bg-[#f0ede6] text-[#4d5750]"
+                  >
+                    <ChevronLeft size={16} />
+                  </button>
+                  <button
+                    onClick={() => setIsPlaying((prev) => !prev)}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#2e4033] text-white hover:bg-[#202d24] transition shadow-sm"
+                  >
+                    {isPlaying ? <Pause size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" />}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setIsPlaying(false);
+                      setCurrentFrameIdx((prev) => Math.min((analysis?.frames?.length || 1) - 1, prev + 1));
+                    }}
+                    title="Next frame"
+                    className="p-1.5 rounded-lg hover:bg-[#f0ede6] text-[#4d5750]"
+                  >
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
+
+                {/* Speed and Loop Controls */}
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center rounded-lg bg-[#f0ede6] p-0.5 text-[11px] font-semibold">
+                    {[0.5, 1.0, 2.0, 4.0].map((spd) => (
+                      <button
+                        key={spd}
+                        onClick={() => setPlaybackSpeed(spd)}
+                        className={`rounded-md px-2 py-0.5 transition ${
+                          playbackSpeed === spd ? "bg-white text-[#202d24] shadow-xs" : "text-[#717b73] hover:text-[#202d24]"
+                        }`}
+                      >
+                        {spd}x
+                      </button>
+                    ))}
+                  </div>
+
+                  <button
+                    onClick={() => setIsLooping((prev) => !prev)}
+                    className={`rounded-md px-2 py-1 text-[11px] font-semibold transition border ${
+                      isLooping ? "bg-emerald-50 text-emerald-800 border-emerald-300" : "bg-white text-[#717b73] border-[#e2ded5]"
+                    }`}
+                  >
+                    LOOP {isLooping ? "ON" : "OFF"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Active Frame Vehicles & Live Hydrotest Verification (4 cols) */}
+          <div className="lg:col-span-4 flex flex-col rounded-2xl border border-[#e2ded5] bg-white p-4 shadow-sm">
+            <div className="mb-3 flex items-center justify-between border-b border-[#f0ece5] pb-2.5">
+              <div>
+                <h3 className="font-bold text-sm text-[#242f27]">Frame Vehicles &amp; Hydrotest</h3>
+                <p className="text-[11px] text-[#707c73]">Visible in current frame ({currentDetections.length})</p>
+              </div>
+              <span className="rounded-full bg-[#f2efe8] px-2 py-0.5 font-mono text-[10px] font-bold text-[#556157]">
+                {formatTime(currentFrame?.timestamp_sec ?? 0)}
+              </span>
+            </div>
+
+            {/* List of active vehicles */}
+            <div className="flex-1 space-y-2.5 overflow-y-auto max-h-[440px] pr-1">
+              {currentDetections.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-center text-[#818c83]">
+                  <ScanLine size={32} className="stroke-1 mb-2 opacity-50" />
+                  <p className="text-xs font-medium">No vehicles in near field</p>
+                  <p className="text-[11px] text-[#a1aaa2] mt-0.5">Scrub timeline to see tracked vehicles</p>
+                </div>
+              ) : (
+                currentDetections.map((d) => {
+                  const ht = d.hydrotest;
+                  const status = ht?.status ?? (d.plate?.india_format_valid ? "VALID" : "NEEDS_REVIEW");
+                  const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.NEEDS_REVIEW;
+                  const StatusIcon = cfg.icon;
+
+                  return (
+                    <div
+                      key={d.vehicle_id}
+                      className={`rounded-xl border p-3 transition hover:shadow-md ${cfg.color} ${cfg.border} bg-opacity-40`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-white shadow-xs">
+                            <Truck size={14} className="text-[#3c4a3f]" />
+                          </div>
+                          <div>
+                            <span className="font-bold text-xs text-[#1e2820]">{d.vehicle_id}</span>
+                            <span className="text-[10px] text-[#637066] ml-1.5 uppercase font-semibold">
+                              {d.vehicle_type} ({(d.confidence * 100).toFixed(0)}%)
+                            </span>
+                          </div>
+                        </div>
+
+                        <span className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider ${cfg.badge}`}>
+                          {cfg.label}
+                        </span>
+                      </div>
+
+                      {/* Plate and Hydrotest Info */}
+                      <div className="mt-2.5 rounded-lg bg-white/80 p-2 text-xs space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-semibold text-[#667268]">Plate OCR:</span>
+                          <span className="font-mono font-bold text-xs text-[#1e2a22]">
+                            {d.plate?.normalized_text || d.plate?.raw_text || "Unrecognized"}
+                          </span>
+                        </div>
+
+                        {ht && (
+                          <>
+                            {ht.owner && (
+                              <div className="flex items-center justify-between text-[11px]">
+                                <span className="text-[#748177]">Owner:</span>
+                                <span className="font-medium truncate max-w-[140px]">{ht.owner}</span>
+                              </div>
+                            )}
+                            {ht.next_due_date && (
+                              <div className="flex items-center justify-between text-[11px]">
+                                <span className="text-[#748177]">Due Date:</span>
+                                <span className="font-medium">{ht.next_due_date}</span>
+                              </div>
+                            )}
+                            {ht.message && (
+                              <p className="text-[10px] leading-tight text-[#525f54] pt-0.5 border-t border-black/5">
+                                {ht.message}
+                              </p>
+                            )}
+                          </>
+                        )}
+                      </div>
+
+                      {/* Alert acknowledgment button if critical alert */}
+                      {ht?.alert && !ht.alert.acknowledged && (
+                        <div className="mt-2 flex items-center justify-between rounded-md bg-rose-100 p-1.5 text-[10px] text-rose-800">
+                          <span className="font-semibold">Action Required</span>
+                          <button
+                            onClick={() => acknowledgeAlert(ht.alert.id)}
+                            className="rounded bg-rose-600 px-2 py-0.5 font-bold text-white hover:bg-rose-700 transition"
+                          >
+                            Acknowledge
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* All Tracked Vehicles Table & Audit Ledger */}
+        <section className="rounded-2xl border border-[#e2ded5] bg-white p-4 shadow-sm space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#f0ece5] pb-3">
+            <div>
+              <h3 className="font-bold text-base text-[#242f27]">Complete Video Vehicle Ledger</h3>
+              <p className="text-xs text-[#707c73]">
+                Summary of all {analysis?.vehicles?.length ?? 0} unique vehicles tracked throughout the video
+              </p>
+            </div>
+
+            {/* Filter and Search */}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative">
+                <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#8b968e]" />
+                <input
+                  type="text"
+                  placeholder="Search vehicle ID, plate, owner..."
+                  value={filterQuery}
+                  onChange={(e) => setFilterQuery(e.target.value)}
+                  className="rounded-lg border border-[#ded9cf] bg-[#faf9f6] pl-8 pr-3 py-1.5 text-xs text-[#2b352e] outline-none focus:border-[#c45c32] focus:bg-white transition"
+                />
+              </div>
+
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="rounded-lg border border-[#ded9cf] bg-[#faf9f6] px-2.5 py-1.5 text-xs font-semibold text-[#48534a] outline-none focus:border-[#c45c32]"
+              >
+                <option value="ALL">All Statuses</option>
+                <option value="VALID">Valid</option>
+                <option value="EXPIRED">Expired</option>
+                <option value="EXPIRING_SOON">Expiring Soon</option>
+                <option value="NEEDS_REVIEW">Needs Review</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Table */}
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs text-[#414d43]">
+              <thead className="bg-[#faf9f6] text-[11px] uppercase font-bold text-[#727d74] border-b border-[#eae6de]">
+                <tr>
+                  <th className="py-2.5 px-3">Vehicle ID</th>
+                  <th className="py-2.5 px-3">Type</th>
+                  <th className="py-2.5 px-3">License Plate</th>
+                  <th className="py-2.5 px-3">Hydrotest Status</th>
+                  <th className="py-2.5 px-3">Owner / Certificate</th>
+                  <th className="py-2.5 px-3">Due Date</th>
+                  <th className="py-2.5 px-3 text-right">Video Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#f2efe8]">
+                {filteredVehicles.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="text-center py-8 text-xs text-[#8c978e]">
+                      No vehicle records matched your filter.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredVehicles.map((veh) => {
+                    const ht = veh.hydrotest;
+                    const status = ht?.status ?? (veh.identified ? "VALID" : "NEEDS_REVIEW");
+                    const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.NEEDS_REVIEW;
+
+                    return (
+                      <tr key={veh.vehicle_id} className="hover:bg-[#faf9f6] transition">
+                        <td className="py-2.5 px-3 font-mono font-bold text-[#1f2921]">
+                          {veh.vehicle_id}
+                        </td>
+                        <td className="py-2.5 px-3 capitalize">
+                          {veh.vehicle_type}
+                        </td>
+                        <td className="py-2.5 px-3 font-mono font-semibold">
+                          {veh.registration || veh.detection?.plate?.normalized_text || veh.detection?.plate?.raw_text || (
+                            <span className="text-[#a0aaa2] italic font-sans">Unverified</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${cfg.badge}`}>
+                            {cfg.label}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 truncate max-w-[160px]">
+                          {ht?.owner ?? "Fleet Record Unregistered"}
+                        </td>
+                        <td className="py-2.5 px-3">
+                          {ht?.next_due_date ?? "—"}
+                        </td>
+                        <td className="py-2.5 px-3 text-right">
+                          <button
+                            onClick={() => jumpToFrame(veh.first_seen_frame ?? veh.best_frame_number ?? 0)}
+                            className="inline-flex items-center gap-1 rounded bg-[#f0ece5] hover:bg-[#c45c32] hover:text-white px-2 py-1 text-[11px] font-semibold text-[#48544a] transition"
+                          >
+                            <Play size={10} fill="currentColor" />
+                            <span>Jump to Frame</span>
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+
+      {/* Analysis Settings Modal */}
+      {settingsOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-2xl border border-[#e2ded5] bg-white p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-[#f0ece5] pb-3">
+              <div className="flex items-center gap-2">
+                <Sliders size={18} className="text-[#c45c32]" />
+                <h3 className="font-bold text-sm text-[#242f27]">Batch Video Analysis Settings</h3>
+              </div>
+              <button onClick={() => setSettingsOpen(false)} className="text-[#717b73] hover:text-black">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs text-[#525e55]">
+              <div>
+                <label className="flex justify-between font-semibold">
+                  <span>Sample Rate (Frames Per Second)</span>
+                  <span className="font-mono text-[#c45c32]">{settings.sample_fps} fps</span>
+                </label>
+                <input
+                  type="range"
+                  min="0.5"
+                  max="5.0"
+                  step="0.5"
+                  value={settings.sample_fps}
+                  onChange={(e) => setSettings({ ...settings, sample_fps: Number(e.target.value) })}
+                  className="w-full accent-[#c45c32] mt-1"
+                />
+                <p className="text-[10px] text-[#8e9890] mt-0.5">
+                  1.5 fps = ~190 frames for 2-minute video. Higher = more detail but longer analysis.
+                </p>
+              </div>
+
+              <div>
+                <label className="flex justify-between font-semibold">
+                  <span>YOLO Detection Confidence</span>
+                  <span className="font-mono text-[#c45c32]">{(settings.confidence * 100).toFixed(0)}%</span>
+                </label>
+                <input
+                  type="range"
+                  min="0.10"
+                  max="0.80"
+                  step="0.05"
+                  value={settings.confidence}
+                  onChange={(e) => setSettings({ ...settings, confidence: Number(e.target.value) })}
+                  className="w-full accent-[#c45c32] mt-1"
+                />
+              </div>
+
+              <div>
+                <label className="flex justify-between font-semibold">
+                  <span>Max Frames to Analyze</span>
+                  <span className="font-mono text-[#c45c32]">{settings.max_frames || "Full Video"}</span>
+                </label>
+                <input
+                  type="range"
+                  min="30"
+                  max="300"
+                  step="10"
+                  value={settings.max_frames || 120}
+                  onChange={(e) => setSettings({ ...settings, max_frames: Number(e.target.value) })}
+                  className="w-full accent-[#c45c32] mt-1"
+                />
+              </div>
+
+              <label className="flex items-center justify-between pt-2 border-t border-[#f0ece5]">
+                <span className="font-semibold">Enable Tesseract Indian Plate OCR</span>
+                <input
+                  type="checkbox"
+                  checked={settings.ocr_enabled}
+                  onChange={(e) => setSettings({ ...settings, ocr_enabled: e.target.checked })}
+                  className="h-4 w-4 accent-[#c45c32]"
+                />
               </label>
             </div>
-          </details>
-          <button
-            className={`inline-flex min-h-10 items-center gap-2 rounded-lg px-4 text-sm font-semibold text-white shadow-[0_3px_9px_rgba(42,50,41,0.12)] transition disabled:cursor-not-allowed disabled:opacity-50 ${
-              isRunning ? "bg-[#606e63] hover:bg-[#4e5a51]" : "bg-[#c45c32] hover:bg-[#a94b28]"
-            }`}
-            disabled={connection !== "connected"}
-            onClick={isRunning ? stopService : startService}
-            type="button"
-          >
-            {isRunning ? <Square size={14} fill="currentColor" /> : <Play size={15} fill="currentColor" />}
-            {isRunning ? "Stop service" : "Start service"}
-          </button>
-        </div>
-      </section>
 
-      {error && (
-        <div className="mb-3 flex items-start gap-2 rounded-lg border border-[#eed9cf] bg-[#fbf3ed] px-3 py-2 text-sm text-[#9c482b]" role="alert">
-          <AlertCircle className="mt-0.5 shrink-0" size={16} />
-          <span className="flex-1">{error}</span>
-          <button aria-label="Dismiss error" className="rounded p-0.5 hover:bg-[#f5e6dd]" onClick={() => setError("")} type="button"><X size={16} /></button>
+            <div className="flex justify-end gap-2 pt-3 border-t border-[#f0ece5]">
+              <button
+                onClick={() => setSettingsOpen(false)}
+                className="rounded-lg px-3 py-1.5 text-xs font-semibold text-[#525e55] hover:bg-[#f0ede6]"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={startFullAnalysis}
+                className="rounded-lg bg-[#c45c32] px-4 py-1.5 text-xs font-semibold text-white hover:bg-[#ad4e27] transition"
+              >
+                Start Analysis
+              </button>
+            </div>
+          </div>
         </div>
       )}
-
-      <section className="grid gap-3 xl:grid-cols-[minmax(0,1.65fr)_minmax(280px,0.8fr)]">
-        <div className="overflow-hidden rounded-xl border border-white/80 bg-[#faf9f6] p-2.5 shadow-[3px_4px_13px_rgba(57,62,49,0.08),-3px_-3px_12px_rgba(255,255,255,0.8)] sm:p-3">
-          <div className="flex flex-wrap items-center justify-between gap-2 px-1 pb-2">
-            <div className="flex items-center gap-2 text-sm font-semibold text-[#424d44]"><ImageIcon className="text-[#53745d]" size={16} /> Sample camera feed</div>
-            <div className="flex items-center gap-2">
-              <span className="rounded-full border border-[#e8dfcc] bg-[#f7f2e6] px-2.5 py-1 text-[11px] font-medium text-[#896b3d]">DEMO · REPEATING STILL</span>
-              {isRunning && <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[#a44c30]"><i className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#c45c32]" /> REC</span>}
-            </div>
-          </div>
-          <div className="relative grid aspect-video min-h-[205px] w-full place-items-center overflow-hidden rounded-lg border border-[#e5e2d9] bg-[#eeece6] sm:min-h-[245px] xl:min-h-[300px]">
-            {(frameImage ?? preview) ? (
-              <img
-                alt={`Full uncropped ${source?.name ?? "sample camera"} frame`}
-                className="absolute inset-0 h-full w-full object-contain"
-                src={frameImage ?? preview}
-              />
-            ) : (
-              <div className="flex flex-col items-center gap-2 text-[#788279]">
-                <ImageIcon size={26} />
-                <span className="text-sm">Waiting for sample frame</span>
-              </div>
-            )}
-            {isRunning && (
-              <>
-                <div className="pointer-events-none absolute inset-x-0 top-0 h-12 animate-scan bg-gradient-to-b from-transparent via-[#69a981]/10 to-transparent" />
-                <div className="pointer-events-none absolute left-3 top-3 rounded-md border border-white/60 bg-[#f7f5ef]/90 px-2 py-1 font-mono text-[11px] font-medium text-[#48554b] shadow-sm">
-                  SAMPLE LOOP · FRAME {String(frameNumber).padStart(4, "0")}
-                </div>
-              </>
-            )}
-            {source && <span className="absolute bottom-2 right-2 rounded bg-[#f8f7f2]/90 px-2 py-1 font-mono text-[10px] text-[#586159]">{source.width} × {source.height}</span>}
-          </div>
-          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-1 pt-2 text-xs text-[#737d74]">
-            <span className="min-w-0 truncate"><span className="font-medium text-[#515d53]">Source</span> · {source?.name ?? "Connecting to API…"}</span>
-            <span className="inline-flex items-center gap-1"><Clock3 size={13} /> {isRunning ? `Frame ${frameNumber} · replaying sample` : "Feed stopped"}</span>
-          </div>
-        </div>
-
-        <aside className="rounded-xl border border-white/80 bg-[#f4f3ed] p-3 shadow-[3px_4px_13px_rgba(57,62,49,0.07),-3px_-3px_12px_rgba(255,255,255,0.8)] sm:p-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-[#414c43]">Session activity</h2>
-            <span className="text-[11px] text-[#818980]">In-memory log</span>
-          </div>
-          <div className="mt-3 grid grid-cols-3 divide-x divide-[#e0ded5] rounded-lg border border-white/70 bg-[#faf9f5] py-2.5 shadow-[inset_1px_1px_4px_rgba(62,68,57,0.035)]">
-            <CountMetric label="Tracked" value={recordList.length} />
-            <CountMetric label="Identified" value={identifiedRecords.length} />
-            <CountMetric label="Review" value={reviewRecords.length} />
-          </div>
-          <div className="mt-3 border-t border-[#dfded5] pt-3">
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs font-medium text-[#5b665d]">Pipeline activity</span>
-              <span className="font-mono text-[11px] text-[#7d867e]">{isRunning ? `${progress.percent}%` : "—"}</span>
-            </div>
-            <div className="h-1.5 overflow-hidden rounded-full bg-[#e4e2d9]">
-              <div className="h-full rounded-full bg-[#68896e] transition-all duration-300" style={{ width: `${isRunning ? progress.percent : 0}%` }} />
-            </div>
-            <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1">
-              {PIPELINE.map(([id, label], index) => {
-                const done = isRunning && (progress.stage === "complete" || index < activeStage);
-                const active = isRunning && progress.stage === id;
-                return (
-                  <span className={`inline-flex items-center gap-1 text-[11px] ${active ? "font-semibold text-[#a34d31]" : done ? "text-[#55765c]" : "text-[#9ba198]"}`} key={id}>
-                    {done ? <Check size={11} /> : <i className={`h-1.5 w-1.5 rounded-full ${active ? "bg-[#c45c32]" : "bg-[#c7c9c1]"}`} />}
-                    {label}
-                  </span>
-                );
-              })}
-            </div>
-            <p className="mt-2 min-h-5 text-xs leading-5 text-[#707a71]">{progress.detail}</p>
-          </div>
-          <div className="mt-2 flex items-center justify-between border-t border-[#dfded5] pt-2 text-[11px] text-[#788178]">
-            <span className="truncate">{connection === "connected" ? "Live service connected" : "Waiting for API connection"}</span>
-            <button className="ml-2 shrink-0 font-medium text-[#9a553a] transition hover:text-[#733d2b] disabled:cursor-not-allowed disabled:opacity-45" disabled={recordList.length === 0} onClick={clearLog} type="button">Clear log</button>
-          </div>
-        </aside>
-      </section>
-
-      <section className="mt-4">
-        <div className="mb-2 flex flex-wrap items-end justify-between gap-2">
-          <div>
-            <h2 className="text-base font-semibold text-[#364038] sm:text-lg">Vehicle log</h2>
-            <p className="mt-0.5 text-xs text-[#788178]">Repeated detections are grouped by tracked vehicle ID; the sharpest observed frame is retained.</p>
-          </div>
-          <span className="text-xs text-[#858c84]">{recordList.length} unique vehicle{recordList.length === 1 ? "" : "s"} · {frameNumber} frame{frameNumber === 1 ? "" : "s"} processed</span>
-        </div>
-
-        <div className="grid gap-3 lg:grid-cols-2">
-          <LogSection
-            icon={<ShieldCheck size={16} />}
-            records={identifiedRecords}
-            title="Plate identified"
-            tone="green"
-            onSelect={setSelectedId}
-          />
-          <LogSection
-            icon={<CircleHelp size={16} />}
-            records={reviewRecords}
-            title="Vehicle detected · plate not verified"
-            tone="amber"
-            onSelect={setSelectedId}
-          />
-        </div>
-      </section>
-
-      <footer className="mt-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-[#e1ded6] py-2.5 text-[11px] text-[#858c84]">
-        <span>DEMO INPUT · {source?.name ?? "sample frame"}</span>
-        <span>Still-image replay only · ready to replace with a camera/video source</span>
-      </footer>
-
-      {selectedRecord && <DetailDialog onClose={() => setSelectedId(null)} record={selectedRecord} />}
-    </main>
-  );
-}
-
-function CountMetric({ label, value }) {
-  return (
-    <div className="px-1 text-center">
-      <p className="text-[10px] font-medium text-[#7c857c] sm:text-xs">{label}</p>
-      <p className="mt-0.5 font-mono text-lg font-semibold tabular-nums text-[#39443b]">{value}</p>
     </div>
   );
 }
 
-function SettingSlider({ label, value, min, max, step, display, onChange }) {
+function KPICard({ label, value, sub, icon: Icon, tone = "default" }) {
+  const tones = {
+    default: "bg-white text-[#2a342c] border-[#e2ded5]",
+    emerald: "bg-emerald-50/70 text-emerald-950 border-emerald-200",
+    rose: "bg-rose-50/70 text-rose-950 border-rose-200",
+    amber: "bg-amber-50/70 text-amber-950 border-amber-200",
+    orange: "bg-orange-50/70 text-orange-950 border-orange-200",
+  };
+
+  const iconTones = {
+    default: "text-[#3c4a3f] bg-[#f0ede6]",
+    emerald: "text-emerald-700 bg-emerald-100",
+    rose: "text-rose-700 bg-rose-100",
+    amber: "text-amber-700 bg-amber-100",
+    orange: "text-orange-700 bg-orange-100",
+  };
+
   return (
-    <label className="min-w-0">
-      <span className="flex items-center justify-between gap-1 text-xs text-[#606b61]">
-        {label}<strong className="font-mono text-[#a24c31]">{display}</strong>
-      </span>
-      <input className="mt-2 w-full accent-[#c45c32]" max={max} min={min} onChange={(event) => onChange(Number(event.target.value))} step={step} type="range" value={value} />
-    </label>
+    <div className={`rounded-2xl border p-3.5 shadow-xs transition ${tones[tone] || tones.default}`}>
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-bold uppercase tracking-wider text-[#68746a]">{label}</span>
+        <div className={`flex h-7 w-7 items-center justify-center rounded-lg ${iconTones[tone] || iconTones.default}`}>
+          <Icon size={14} />
+        </div>
+      </div>
+      <div className="mt-1.5 flex items-baseline gap-2">
+        <span className="font-mono text-2xl font-bold tracking-tight">{value}</span>
+      </div>
+      <p className="mt-0.5 text-[10px] text-[#717d73] truncate">{sub}</p>
+    </div>
   );
 }
-
-function LogSection({ icon, records, title, tone, onSelect }) {
-  const identified = tone === "green";
-  return (
-    <section className="overflow-hidden rounded-xl border border-white/80 bg-[#faf9f6] shadow-[2px_3px_11px_rgba(57,62,49,0.06),-2px_-2px_10px_rgba(255,255,255,0.8)]">
-      <header className="flex items-center justify-between border-b border-[#e9e6de] px-3 py-2.5">
-        <h3 className="flex items-center gap-2 text-sm font-semibold text-[#424c44]">{icon}{title}</h3>
-        <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${identified ? "bg-[#edf4ed] text-[#477452]" : "bg-[#f7f0e7] text-[#91683d]"}`}>{records.length}</span>
-      </header>
-      {records.length ? (
-        <div className="max-h-[300px] overflow-y-auto">
-          {records.map((record) => <LogEntry key={record.vehicle_id} onSelect={onSelect} record={record} />)}
-        </div>
-      ) : (
-        <div className="flex min-h-[82px] items-center gap-3 px-4 text-sm text-[#7b857b]">
-          {identified ? <ScanLine className="text-[#909c90]" size={18} /> : <CircleHelp className="text-[#a19378]" size={18} />}
-          <span>{identified ? "Verified-format reads will appear here." : "Uncertain or missing plate reads will appear here."}</span>
-        </div>
-      )}
-    </section>
-  );
-}
-
-export default App;

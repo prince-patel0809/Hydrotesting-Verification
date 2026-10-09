@@ -5,7 +5,8 @@ sample still image as a clearly labeled demo feed, detects nearby vehicles,
 tracks repeat detections within a session, and keeps the sharpest frame for
 each tracked vehicle. Indian plate candidates are enhanced for OCR. A Tailwind
 React dashboard presents the uncropped feed, identified and review-needed logs,
-and tabbed per-vehicle details.
+tabbed per-vehicle details, and hydrotest verification with a fleet summary and
+supervisor alert review.
 
 ## Start the demo
 
@@ -42,3 +43,40 @@ session ends.
 - [ARCHITECTURE.md](ARCHITECTURE.md): services and API result contract.
 - [PROGRESS.md](PROGRESS.md): implementation status and validation.
 - [AGENTS.md](AGENTS.md): repository guidance, including documentation upkeep.
+
+## Hydrotest verification API
+
+The backend also exposes a hydrotest check and supervisor alert API. It looks
+up a supplied plate in the local SQLite `vehicles` registry; an unknown plate
+or missing/invalid due date returns `NEEDS_REVIEW`, never `VALID`. Set
+`HYDROTEST_DB_PATH` to choose the database file. The default database is
+`api/hydrotest.sqlite3`; populate its `vehicles` table from an authorized
+vehicle/cylinder data source before using verification at a pump.
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/verify` | Check `{ "plate": "DL01AB1234" }`; returns `VALID`, `EXPIRING_SOON`, `EXPIRED`, or `NEEDS_REVIEW`, and an alert summary when required |
+| `GET` | `/api/alerts` | List alerts with `state=open\|acknowledged\|all`, optional `level`, `page`, and `page_size` |
+| `POST` | `/api/alerts/{id}/acknowledge` | Acknowledge an alert with optional `{ "note": "..." }` |
+| `GET` | `/api/dashboard` | Return today's verification counts, open alerts, fleet due-date summary, upcoming cylinders, and `all_clear` |
+
+`EXPIRED` raises a deduplicated critical alert and instructs operators not to
+fill. `EXPIRING_SOON` creates a warning; `VALID` creates no alert. Open alerts
+remain visible until acknowledged. Threshold classification is shared between
+verification and fleet summary; due dates within 30 days are categorized as
+expiring soon. These endpoints do not alter or replace the image scan pipeline.
+The web dashboard includes a plate verification form, status result, today's
+verification counts, fleet due-date summary, and open-alert acknowledgement.
+
+### Implementation tracker
+
+| Feature | Status |
+| --- | --- |
+| Alerts | Done |
+
+### Work log
+
+- Added persistent hydrotest verification, deduplicated critical/warning alerts, acknowledgement, and dashboard summaries.
+
+Run the backend tests (including hydrotest API coverage) from `api/` with
+`py -3.11 -m pytest tests -q`.

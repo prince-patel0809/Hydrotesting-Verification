@@ -2,8 +2,12 @@
 
 ## Implemented
 
-- [x] Sample-frame input independent of the React app, replayed as a clearly
-  labeled demo feed.
+- [x] Full-video batch analysis engine (`VideoBatchAnalyzer`) that processes an entire MP4 video file (`video.mp4`) in one pass, generating a complete annotated timeline with tracked vehicle ledger and hydrotest records.
+- [x] Interactive video simulation timeline player in the React dashboard with Play/Pause, timeline scrubber, frame stepping, variable playback speed (0.5x–4x), and auto-looping.
+- [x] Live on-frame HUD displaying active vehicle bounding boxes, detected Indian plate OCR, and instant CNG cylinder compliance status (Valid, Expired, Expiring Soon, Needs Review).
+- [x] Complete video vehicle ledger table with search, status filtering, and "Jump to Frame" navigation.
+- [x] Video file input source (`VideoSource`) cycling continuous frames from an MP4 video (e.g. `video.mp4`), with fallback to `SampleImageSource`.
+- [x] Configurable video frame skip interval (`FRAME_SAMPLE_INTERVAL`) and WebSocket frame dispatch interval (`FRAME_DISPATCH_INTERVAL`).
 - [x] Second test image at `api/image-2.png` selectable through
   `SAMPLE_IMAGE_PATH`.
 - [x] Vehicle detection for supported COCO vehicle classes.
@@ -32,6 +36,12 @@
   details for summary, pipeline results, metadata, and report.
 - [x] Compact, responsive Tailwind light-theme dashboard with an uncropped
   feed and configurable detection controls.
+- [x] Hydrotest panel integrated into the React dashboard with plate
+  verification, today's scan counts, fleet due-date summary, open critical and
+  warning alerts, and supervisor acknowledgement.
+- [x] Hydrotest API persists checks and alerts in SQLite, deduplicates open
+  alerts per plate and level, and routes unknown/invalid records to human
+  review instead of marking them valid.
 - [x] OCR strings without a supported Indian format are explicitly labeled
   uncertain rather than shown as verified plates.
 
@@ -42,7 +52,8 @@
   model and representative Indian plate data.
 - [ ] Improve vehicle tracking beyond the current per-session IoU heuristic
   using representative video and occlusion tests.
-- [ ] Integrate an authorized vehicle-record/PUC/fitness provider.
+- [ ] Integrate an authorized vehicle/cylinder-record provider to populate the
+  local hydrotest registry; no external PUC/insurance/fitness lookup is wired.
 - [ ] Add integration tests against real plate images and supported regional
   plate variants.
 - [ ] Calibrate image-space near-field heuristics for a specific camera.

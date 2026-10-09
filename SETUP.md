@@ -119,7 +119,14 @@ These environment variables are optional:
 | `TESSERACT_CMD` | `tesseract` on `PATH` | Path to the Tesseract executable |
 
 For the frontend, `web/.env.example` documents `VITE_API_BASE_URL`. Leave it
-empty for the default local Vite proxy to `http://127.0.0.1:8000`.
+empty for the default local Vite proxy to `http://127.0.0.1:8000`. To proxy to
+an API running on another address/port, set `VITE_API_PROXY_TARGET` in the web
+terminal before `npm run dev`, for example:
+
+```powershell
+$env:VITE_API_PROXY_TARGET = "http://127.0.0.1:8002"
+npm run dev
+```
 
 ## Run the tests and production build
 
