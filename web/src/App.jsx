@@ -40,7 +40,7 @@ import {
   X,
 } from "lucide-react";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "https://hydrotesting-verification.onrender.com";
 
 const STATUS_CONFIG = {
   VALID: {
