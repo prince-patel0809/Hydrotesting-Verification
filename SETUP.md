@@ -152,3 +152,12 @@ npm run build
   set `TESSERACT_CMD` in the same terminal where Uvicorn is started.
 - **A configured image cannot be opened:** verify `SAMPLE_IMAGE_PATH` points
   to an existing image file before starting the API.
+- **Uvicorn fails with a `pydantic_core` import error:** from the `api/`
+  directory, reinstall Pydantic and its compiled core package in the active
+  virtual environment, then start the API:
+
+  ```powershell
+  .\.venv\Scripts\Activate.ps1
+  python -m pip install --no-cache-dir --force-reinstall pydantic pydantic-core
+  python -m uvicorn app.main:app --reload
+  ```
